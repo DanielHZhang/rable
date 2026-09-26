@@ -6,8 +6,8 @@ use super::decompose_word_with_spans;
 #[allow(clippy::unwrap_used)]
 fn decompose(source: &str) -> Vec<Node> {
     let mut lexer = crate::lexer::Lexer::new(source, false);
-    let tok = lexer.next_token().unwrap();
-    decompose_word_with_spans(&tok.value, &tok.spans)
+    let mut tok = lexer.next_token().unwrap();
+    decompose_word_with_spans(&tok.value, &mut tok.spans)
 }
 
 #[test]
@@ -26,7 +26,7 @@ fn simple_variable_expansion() {
     assert_eq!(parts.len(), 1);
     assert!(matches!(
         &parts[0].kind,
-        NodeKind::ParamExpansion { param, op, arg }
+        NodeKind::ParamExpansion { param, op, arg, .. }
         if param == "foo" && op.is_none() && arg.is_none()
     ));
 }
@@ -37,7 +37,7 @@ fn braced_variable_expansion() {
     assert_eq!(parts.len(), 1);
     assert!(matches!(
         &parts[0].kind,
-        NodeKind::ParamExpansion { param, op, arg }
+        NodeKind::ParamExpansion { param, op, arg, .. }
         if param == "foo" && op.is_none() && arg.is_none()
     ));
 }
@@ -48,7 +48,7 @@ fn param_with_default() {
     assert_eq!(parts.len(), 1);
     assert!(matches!(
         &parts[0].kind,
-        NodeKind::ParamExpansion { param, op, arg }
+        NodeKind::ParamExpansion { param, op, arg, .. }
         if param == "foo"
             && op.as_deref() == Some(":-")
             && arg.as_deref() == Some("default")
@@ -71,7 +71,7 @@ fn param_indirect() {
     assert_eq!(parts.len(), 1);
     assert!(matches!(
         &parts[0].kind,
-        NodeKind::ParamIndirect { param, op, arg }
+        NodeKind::ParamIndirect { param, op, arg, .. }
         if param == "foo" && op.is_none() && arg.is_none()
     ));
 }
@@ -82,7 +82,7 @@ fn special_param_question_mark() {
     assert_eq!(parts.len(), 1);
     assert!(matches!(
         &parts[0].kind,
-        NodeKind::ParamExpansion { param, op, arg }
+        NodeKind::ParamExpansion { param, op, arg, .. }
         if param == "?" && op.is_none() && arg.is_none()
     ));
 }
@@ -93,7 +93,7 @@ fn positional_param() {
     assert_eq!(parts.len(), 1);
     assert!(matches!(
         &parts[0].kind,
-        NodeKind::ParamExpansion { param, op, arg }
+        NodeKind::ParamExpansion { param, op, arg, .. }
         if param == "1" && op.is_none() && arg.is_none()
     ));
 }
@@ -104,7 +104,7 @@ fn multi_digit_positional() {
     assert_eq!(parts.len(), 1);
     assert!(matches!(
         &parts[0].kind,
-        NodeKind::ParamExpansion { param, op, arg }
+        NodeKind::ParamExpansion { param, op, arg, .. }
         if param == "10" && op.is_none() && arg.is_none()
     ));
 }
@@ -115,7 +115,7 @@ fn prefix_removal_operator() {
     assert_eq!(parts.len(), 1);
     assert!(matches!(
         &parts[0].kind,
-        NodeKind::ParamExpansion { param, op, arg }
+        NodeKind::ParamExpansion { param, op, arg, .. }
         if param == "foo"
             && op.as_deref() == Some("##")
             && arg.as_deref() == Some("pattern")
@@ -129,7 +129,7 @@ fn special_param_hash_braced() {
     assert_eq!(parts.len(), 1);
     assert!(matches!(
         &parts[0].kind,
-        NodeKind::ParamExpansion { param, op, arg }
+        NodeKind::ParamExpansion { param, op, arg, .. }
         if param == "#" && op.is_none() && arg.is_none()
     ));
 }
@@ -158,7 +158,7 @@ fn array_subscript() {
     assert_eq!(parts.len(), 1);
     assert!(matches!(
         &parts[0].kind,
-        NodeKind::ParamExpansion { param, op, arg }
+        NodeKind::ParamExpansion { param, op, arg, .. }
         if param == "arr[@]" && op.is_none() && arg.is_none()
     ));
 }
@@ -169,7 +169,7 @@ fn indirect_with_operator() {
     assert_eq!(parts.len(), 1);
     assert!(matches!(
         &parts[0].kind,
-        NodeKind::ParamIndirect { param, op, arg }
+        NodeKind::ParamIndirect { param, op, arg, .. }
         if param == "foo"
             && op.as_deref() == Some(":-")
             && arg.as_deref() == Some("bar")
@@ -280,7 +280,8 @@ fn arithmetic_expansion_decomposed() {
     assert!(matches!(
         &parts[0].kind,
         NodeKind::ArithmeticExpansion {
-            expression: Some(_)
+            expression: Some(_),
+            ..
         }
     ));
 }
@@ -306,7 +307,8 @@ fn arithmetic_in_mixed_word() {
     assert!(matches!(
         &parts[1].kind,
         NodeKind::ArithmeticExpansion {
-            expression: Some(_)
+            expression: Some(_),
+            ..
         }
     ));
     assert!(matches!(
@@ -322,6 +324,7 @@ fn arithmetic_expression_tree_shape() {
     let parts = decompose("$((1+2))");
     let NodeKind::ArithmeticExpansion {
         expression: Some(expr),
+        ..
     } = &parts[0].kind
     else {
         unreachable!("expected parsed arithmetic expression");

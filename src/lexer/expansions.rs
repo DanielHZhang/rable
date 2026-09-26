@@ -107,9 +107,14 @@ impl Lexer {
     pub(super) fn read_paren_body_forked(&mut self, wb: &mut WordBuilder) -> Result<()> {
         let body_start = self.pos;
         let outer_depth = self.parser_depth();
-        let (end_pos, end_line) = crate::parser::parse_paren_body(self, outer_depth)?;
+        let crate::parser::ForkedBody {
+            end_pos,
+            end_line,
+            node,
+        } = crate::parser::parse_paren_body(self, outer_depth)?;
         wb.value
             .extend(self.input[body_start..end_pos].iter().copied());
+        wb.set_pending_body(node);
         self.pos = end_pos;
         self.line = end_line;
         Ok(())
@@ -170,9 +175,11 @@ impl Lexer {
                 }
                 Some('`') => {
                     state.word_buf.clear();
+                    let span_start = wb.span_start();
                     self.advance_char();
                     wb.push('`');
                     self.read_backtick(wb)?;
+                    wb.record(span_start, WordSpanKind::Backtick);
                 }
                 Some('#') => self.handle_paren_comment(wb, &mut state),
                 Some(';') => self.handle_paren_semi(wb, &mut state),
@@ -389,9 +396,11 @@ impl Lexer {
                     self.read_dollar(wb)?;
                 }
                 Some('`') => {
+                    let span_start = wb.span_start();
                     self.advance_char();
                     wb.push('`');
                     self.read_backtick(wb)?;
+                    wb.record(span_start, WordSpanKind::Backtick);
                 }
                 Some(c) => {
                     self.advance_char();
@@ -419,12 +428,23 @@ impl Lexer {
     fn read_backtick_inner(&mut self, wb: &mut WordBuilder) -> Result<()> {
         let body_start = self.pos;
         let outer_depth = self.parser_depth();
-        let (end_pos, end_line) = match crate::parser::parse_backtick_body(self, outer_depth) {
-            Ok(r) => r,
-            Err(_) => self.scan_backtick_opaque(body_start)?,
+        let (end_pos, end_line, node) = if let Ok(crate::parser::ForkedBody {
+            end_pos,
+            end_line,
+            node,
+        }) =
+            crate::parser::parse_backtick_body(self, outer_depth)
+        {
+            (end_pos, end_line, Some(node))
+        } else {
+            let (end_pos, end_line) = self.scan_backtick_opaque(body_start)?;
+            (end_pos, end_line, None)
         };
         wb.value
             .extend(self.input[body_start..end_pos].iter().copied());
+        if let Some(node) = node {
+            wb.set_pending_body(node);
+        }
         self.pos = end_pos;
         self.line = end_line;
         Ok(())

@@ -45,6 +45,10 @@ pub(crate) struct WordBuilder {
     /// Stack of quoting contexts — the current context is the last entry.
     /// Empty means top-level (no quoting).
     context_stack: Vec<QuotingContext>,
+    /// Parsed AST for the substitution currently being read. Set by the
+    /// fork-and-merge readers and consumed by the next `record`, so the
+    /// corresponding `WordSpan` can carry the body without re-parsing.
+    pending_body: Option<Box<crate::ast::Node>>,
 }
 
 impl WordBuilder {
@@ -53,7 +57,14 @@ impl WordBuilder {
             value: String::new(),
             spans: Vec::new(),
             context_stack: Vec::new(),
+            pending_body: None,
         }
+    }
+
+    /// Stores the AST parsed for the substitution currently being read.
+    /// The next [`Self::record`] attaches it to the resulting span.
+    pub(crate) fn set_pending_body(&mut self, body: crate::ast::Node) {
+        self.pending_body = Some(Box::new(body));
     }
 
     pub(crate) fn push(&mut self, c: char) {
@@ -82,6 +93,7 @@ impl WordBuilder {
             end: self.value.len(),
             kind,
             context: self.current_context(),
+            body: self.pending_body.take(),
         });
     }
 

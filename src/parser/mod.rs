@@ -27,7 +27,7 @@ mod lists;
 mod loops;
 mod redirects;
 mod simple_command;
-mod word_parts;
+pub mod word_parts;
 
 use crate::ast::{Node, NodeKind, Span};
 use crate::error::{RableError, Result};
@@ -36,8 +36,11 @@ use crate::token::{Token, TokenType};
 
 use helpers::{fill_heredoc_contents, word_node_from_token};
 
-/// Maximum recursion/iteration depth to prevent infinite loops.
-const MAX_DEPTH: usize = 1000;
+/// Maximum recursion/iteration depth to prevent infinite loops and native
+/// stack exhaustion. Kept well below the point where deeply nested
+/// recursive-descent frames overflow the stack; inputs beyond it fail
+/// closed with a parse error rather than crashing the process.
+const MAX_DEPTH: usize = 400;
 
 /// Recursive descent parser for bash.
 pub struct Parser {
@@ -45,35 +48,55 @@ pub struct Parser {
     pub(super) depth: usize,
 }
 
+/// The result of forking a parser to read a nested substitution body:
+/// the inner lexer's final `(pos, line)` plus the parsed body AST.
+///
+/// The AST is returned so word decomposition can reuse it instead of
+/// re-parsing the same text, which is what previously made deeply nested
+/// substitutions super-linear.
+pub struct ForkedBody {
+    pub end_pos: usize,
+    pub end_line: usize,
+    pub node: Node,
+}
+
 /// Runs the real command-list grammar on a fork of `outer` until the
-/// matching `)` is consumed. Returns the inner lexer's final `(pos, line)`;
-/// the parsed AST is discarded. `outer_depth` is inherited so `MAX_DEPTH`
-/// stays enforced globally across nested parenthesized bodies.
+/// matching `)` is consumed. Returns the inner lexer's final position and
+/// the parsed body AST. `outer_depth` is inherited so `MAX_DEPTH` stays
+/// enforced globally across nested parenthesized bodies.
 ///
 /// Used by both `$(...)` command substitution and `<(...)`/`>(...)` process
 /// substitution — their bodies are structurally identical (a command list
 /// terminated by `)`), and `LexerMode::Cmdsub` already provides the
 /// `DELIM)`-rewind heredoc behavior both need.
-pub fn parse_paren_body(outer: &Lexer, outer_depth: usize) -> Result<(usize, usize)> {
+pub fn parse_paren_body(outer: &Lexer, outer_depth: usize) -> Result<ForkedBody> {
     let mut parser = Parser {
         lexer: outer.fork(LexerMode::Cmdsub),
         depth: outer_depth,
     };
-    parser.parse_paren_body_inner()?;
-    Ok((parser.lexer.pos(), parser.lexer.line()))
+    let node = parser.parse_paren_body_inner()?;
+    Ok(ForkedBody {
+        end_pos: parser.lexer.pos(),
+        end_line: parser.lexer.line(),
+        node,
+    })
 }
 
 /// Runs the real command-list grammar on a backtick fork of `outer`
 /// until an unescaped `` ` `` is reached. Consumes the closing `` ` ``
-/// and returns the inner lexer's final `(pos, line)`; the parsed AST is
-/// discarded. `outer_depth` is inherited for `MAX_DEPTH`.
-pub fn parse_backtick_body(outer: &Lexer, outer_depth: usize) -> Result<(usize, usize)> {
+/// and returns the inner lexer's final position plus the parsed body AST.
+/// `outer_depth` is inherited for `MAX_DEPTH`.
+pub fn parse_backtick_body(outer: &Lexer, outer_depth: usize) -> Result<ForkedBody> {
     let mut parser = Parser {
         lexer: outer.fork(LexerMode::Backtick),
         depth: outer_depth,
     };
-    parser.parse_backtick_body_inner()?;
-    Ok((parser.lexer.pos(), parser.lexer.line()))
+    let node = parser.parse_backtick_body_inner()?;
+    Ok(ForkedBody {
+        end_pos: parser.lexer.pos(),
+        end_line: parser.lexer.line(),
+        node,
+    })
 }
 
 impl Parser {
@@ -81,21 +104,26 @@ impl Parser {
         Self { lexer, depth: 0 }
     }
 
-    fn parse_paren_body_inner(&mut self) -> Result<()> {
+    fn parse_paren_body_inner(&mut self) -> Result<Node> {
         self.skip_newlines()?;
-        if !self.peek_is(TokenType::RightParen)? {
-            let _ = self.parse_list()?;
-        }
+        let node = if self.peek_is(TokenType::RightParen)? {
+            Node::empty(NodeKind::Empty)
+        } else {
+            self.parse_list()?
+        };
         self.expect(TokenType::RightParen)?;
-        Ok(())
+        Ok(node)
     }
 
-    fn parse_backtick_body_inner(&mut self) -> Result<()> {
+    fn parse_backtick_body_inner(&mut self) -> Result<Node> {
         self.skip_newlines()?;
-        if !self.at_end()? {
-            let _ = self.parse_list()?;
-        }
-        self.lexer.exit_backtick_fork()
+        let node = if self.at_end()? {
+            Node::empty(NodeKind::Empty)
+        } else {
+            self.parse_list()?
+        };
+        self.lexer.exit_backtick_fork()?;
+        Ok(node)
     }
 
     /// Parses the entire input, returning a list of top-level nodes.

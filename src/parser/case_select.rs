@@ -12,11 +12,14 @@ impl Parser {
     pub(super) fn parse_case(&mut self) -> Result<Node> {
         let start = self.peek_pos()?;
         self.expect(TokenType::Case)?;
-        let word_tok = self.lexer.next_token()?;
+        let mut word_tok = self.lexer.next_token()?;
+        let parts = word_parts::decompose_word_with_spans(&word_tok.value, &mut word_tok.spans);
+        let dequoted = crate::parser::helpers::word_dequoted(&word_tok.value, &word_tok.spans);
         let word = Box::new(Node::new(
             NodeKind::Word {
-                parts: word_parts::decompose_word_with_spans(&word_tok.value, &word_tok.spans),
+                parts,
                 value: word_tok.value.clone(),
+                dequoted,
                 spans: word_tok.spans,
             },
             // Char count, not byte length: `pos` is a character index (#383).

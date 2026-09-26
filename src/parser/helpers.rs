@@ -23,13 +23,28 @@ pub(super) const fn is_redirect_op_kind(kind: TokenType) -> bool {
 }
 
 /// Creates a `Word` node from a lexer token, moving value and spans.
-pub fn word_node_from_token(tok: Token) -> Node {
-    let parts = super::word_parts::decompose_word_with_spans(&tok.value, &tok.spans);
+pub fn word_node_from_token(mut tok: Token) -> Node {
+    let parts = super::word_parts::decompose_word_with_spans(&tok.value, &mut tok.spans);
+    let dequoted = word_dequoted(&tok.value, &tok.spans);
     Node::empty(NodeKind::Word {
         parts,
         value: tok.value,
+        dequoted,
         spans: tok.spans,
     })
+}
+
+/// Static dequoted value for a word, or `None` when it contains an
+/// expansion. Shared by every `Word` construction site.
+pub(super) fn word_dequoted(
+    value: &str,
+    spans: &[crate::lexer::word_builder::WordSpan],
+) -> Option<String> {
+    if super::word_parts::has_expansion_spans(spans) {
+        None
+    } else {
+        super::word_parts::dequote(value)
+    }
 }
 
 /// Creates a `Word` node for synthetic values (no lexer token).
@@ -37,15 +52,18 @@ pub fn word_node(value: &str) -> Node {
     Node::empty(NodeKind::Word {
         parts: super::word_parts::decompose_word_literal(value),
         value: value.to_string(),
+        dequoted: Some(value.to_string()),
         spans: Vec::new(),
     })
 }
 
 /// Creates a `cond-term` node from a lexer token, moving value and spans.
-pub(super) fn cond_term_from_token(tok: Token) -> Node {
+pub(super) fn cond_term_from_token(mut tok: Token) -> Node {
+    let parts = super::word_parts::decompose_word_with_spans(&tok.value, &mut tok.spans);
     Node::empty(NodeKind::CondTerm {
         value: tok.value,
         spans: tok.spans,
+        parts,
     })
 }
 
@@ -113,6 +131,7 @@ pub(super) fn make_stderr_redirect() -> Node {
         op: ">&".to_string(),
         target: Box::new(Node::empty(NodeKind::Word {
             value: "1".to_string(),
+            dequoted: Some("1".to_string()),
             parts: vec![Node::empty(NodeKind::WordLiteral {
                 value: "1".to_string(),
             })],
@@ -125,12 +144,39 @@ pub(super) fn make_stderr_redirect() -> Node {
 
 /// Walks an AST node and fills in empty `HereDoc` content from the lexer queue.
 pub(super) fn fill_heredoc_contents(node: &mut Node, lexer: &mut crate::lexer::Lexer) {
-    match &mut node.kind {
-        NodeKind::HereDoc { content, .. } if content.is_empty() => {
-            if let Some(c) = lexer.take_heredoc_content() {
-                *content = c;
-            }
+    if let NodeKind::HereDoc {
+        content,
+        quoted,
+        parts,
+        ..
+    } = &mut node.kind
+    {
+        if content.is_empty() {
+            fill_heredoc_content(content, *quoted, parts, lexer);
         }
+        return;
+    }
+    fill_compound_heredocs(node, lexer);
+}
+
+/// Fills one here-document body plus its decomposed parts.
+fn fill_heredoc_content(
+    content: &mut String,
+    quoted: bool,
+    parts: &mut Vec<Node>,
+    lexer: &mut crate::lexer::Lexer,
+) {
+    if let Some(c) = lexer.take_heredoc_content() {
+        if !quoted {
+            *parts = lexer.decompose_fragment(&c);
+        }
+        *content = c;
+    }
+}
+
+/// Recurses `fill_heredoc_contents` through every compound-command slot.
+fn fill_compound_heredocs(node: &mut Node, lexer: &mut crate::lexer::Lexer) {
+    match &mut node.kind {
         NodeKind::Command {
             assignments,
             words,

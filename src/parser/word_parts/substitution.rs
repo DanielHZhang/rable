@@ -3,18 +3,30 @@
 //! inputs like `$($($($($(…))))))`.
 
 use crate::ast::{ListItem, Node, NodeKind, Span};
+use crate::lexer::word_builder::WordSpan;
 
-use super::{DepthGuard, literal_fallback};
+use super::{DepthGuard, decompose_region, literal_fallback};
 
 /// Decomposes the inner text of a `$((...))` arithmetic substitution
 /// into a typed `ArithmeticExpansion` node. On parse failure the
 /// `expression` field is left as `None`, matching the existing best-effort
 /// semantics used elsewhere in word decomposition.
-pub(super) fn arithmetic_sub_to_node(inner: &str) -> Node {
+///
+/// `parts` additionally decomposes the expression text, so command
+/// substitutions the arithmetic expression parser cannot represent
+/// (e.g. `$((1 + $(cmd)))`) are still reachable.
+pub(super) fn arithmetic_sub_to_node(
+    inner: &str,
+    value: &str,
+    spans: &mut [WordSpan],
+    index: usize,
+) -> Node {
     let expression = crate::parser::arithmetic::parse_arith_expression(inner)
         .ok()
         .map(Box::new);
-    Node::empty(NodeKind::ArithmeticExpansion { expression })
+    let (start, end) = (spans[index].start, spans[index].end);
+    let parts = decompose_region(value, spans, start + 3, end.saturating_sub(2));
+    Node::empty(NodeKind::ArithmeticExpansion { expression, parts })
 }
 
 pub(super) fn cmdsub_to_node(content: &str) -> Node {

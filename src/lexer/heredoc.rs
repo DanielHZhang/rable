@@ -1,4 +1,7 @@
+use crate::ast::Node;
+
 use super::Lexer;
+use super::word_builder::WordBuilder;
 
 /// Parses a here-document delimiter word, stripping `'...'`, `"..."`, and
 /// `\X` quoting. Returns the normalized delimiter and a flag indicating
@@ -234,5 +237,49 @@ impl Lexer {
         } else {
             Some(self.heredoc_contents.remove(0))
         }
+    }
+}
+
+impl Lexer {
+    /// Decomposes an unquoted here-document body into word parts.
+    ///
+    /// Here-document bodies expand parameter, command, and arithmetic
+    /// substitutions (but not quoting), so we scan the body with the same
+    /// expansion readers used for double-quoted words. This exposes nested
+    /// commands such as `$(cmd)` inside `<<EOF` bodies.
+    pub(crate) fn decompose_fragment(&self, content: &str) -> Vec<Node> {
+        // Fast path: nothing to expand, so no scan is needed. Keeps large
+        // literal here-documents and arithmetic bodies cheap.
+        if !content.contains('$') && !content.contains('`') {
+            return Vec::new();
+        }
+        let mut lexer = Self::new(content, self.config.extglob);
+        let mut wb = WordBuilder::new();
+        while let Some(c) = lexer.peek_char() {
+            match c {
+                '$' => {
+                    if lexer.read_dollar(&mut wb).is_err() {
+                        break;
+                    }
+                }
+                '`' => {
+                    if lexer.read_backtick(&mut wb).is_err() {
+                        break;
+                    }
+                }
+                '\\' => {
+                    lexer.advance_char();
+                    wb.push('\\');
+                    if let Some(next) = lexer.advance_char() {
+                        wb.push(next);
+                    }
+                }
+                _ => {
+                    lexer.advance_char();
+                    wb.push(c);
+                }
+            }
+        }
+        crate::parser::word_parts::decompose_word_with_spans(&wb.value, &mut wb.spans)
     }
 }

@@ -17,12 +17,18 @@ pub struct Span {
 /// Records where each expansion starts/ends in the raw token text.
 /// External consumers see this type through the variant field but cannot
 /// read or construct it — the fields are crate-private.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `body` carries the already-parsed AST for command / process / backtick
+/// substitution spans. The lexer produces it while locating the matching
+/// delimiter, so word decomposition can reuse it instead of re-parsing the
+/// same source. It is `None` for every other span kind.
+#[derive(Debug, Clone, PartialEq)]
 pub struct WordSpan {
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) kind: WordSpanKind,
     pub(crate) context: QuotingContext,
+    pub(crate) body: Option<Box<Node>>,
 }
 
 impl Span {
@@ -92,8 +98,15 @@ impl Node {
 #[allow(clippy::use_self)]
 pub enum NodeKind {
     /// A word token, possibly containing expansion parts.
+    ///
+    /// `dequoted` is the statically-known literal value after quote and
+    /// backslash removal, or `None` when the word contains an expansion
+    /// whose runtime value cannot be known. This lets consumers match on
+    /// the effective command/argument text (`'sudo'` → `Some("sudo")`)
+    /// without implementing shell dequoting themselves.
     Word {
         value: String,
+        dequoted: Option<String>,
         parts: Vec<Node>,
         spans: Vec<WordSpan>,
     },
@@ -207,6 +220,10 @@ pub enum NodeKind {
     },
 
     /// Here-document: `<<[-]DELIM\ncontent\nDELIM`
+    ///
+    /// `parts` is the decomposed body for unquoted (expanding) heredocs,
+    /// exposing nested command/parameter expansions. It is empty for
+    /// quoted heredocs, whose body is literal.
     HereDoc {
         delimiter: String,
         content: String,
@@ -214,24 +231,33 @@ pub enum NodeKind {
         quoted: bool,
         fd: i32,
         complete: bool,
+        parts: Vec<Node>,
     },
 
     // -- Expansions --
     /// Parameter expansion: `$var` or `${var[op arg]}`
+    ///
+    /// `parts` decomposes the expansion body (array subscript and/or
+    /// operator argument), exposing nested command substitutions such as
+    /// `${x:-$(cmd)}` and `${arr[$(cmd)]}`.
     ParamExpansion {
         param: String,
         op: Option<String>,
         arg: Option<String>,
+        parts: Vec<Node>,
     },
 
     /// Parameter length: `${#var}`
     ParamLength { param: String },
 
     /// Indirect expansion: `${!var[op arg]}`
+    ///
+    /// `parts` decomposes the expansion body as for [`Self::ParamExpansion`].
     ParamIndirect {
         param: String,
         op: Option<String>,
         arg: Option<String>,
+        parts: Vec<Node>,
     },
 
     /// Command substitution: `$(cmd)` or `` `cmd` ``
@@ -264,13 +290,21 @@ pub enum NodeKind {
     BraceExpansion { content: String },
 
     /// Arithmetic expansion: `$(( expr ))`
-    ArithmeticExpansion { expression: Option<Box<Node>> },
+    ///
+    /// `parts` decomposes the expression text, exposing nested command
+    /// substitutions such as `$((1 + $(cmd)))` that the arithmetic
+    /// expression parser does not itself represent.
+    ArithmeticExpansion {
+        expression: Option<Box<Node>>,
+        parts: Vec<Node>,
+    },
 
     /// Arithmetic command: `(( expr ))`
     ArithmeticCommand {
         expression: Option<Box<Node>>,
         redirects: Vec<Node>,
         raw_content: String,
+        parts: Vec<Node>,
     },
 
     // -- Arithmetic expression nodes --
@@ -364,7 +398,14 @@ pub enum NodeKind {
     CondParen { inner: Box<Node> },
 
     /// A term (word) in a conditional expression.
-    CondTerm { value: String, spans: Vec<WordSpan> },
+    ///
+    /// `parts` decomposes the term, exposing nested command substitutions
+    /// such as `[[ $(cmd) == x ]]`.
+    CondTerm {
+        value: String,
+        spans: Vec<WordSpan>,
+        parts: Vec<Node>,
+    },
 
     // -- Other --
     /// Pipeline negation with `!`.
@@ -426,6 +467,197 @@ impl CasePattern {
             patterns,
             body,
             terminator,
+        }
+    }
+}
+
+/// Visits `Option<&Node>` if present.
+fn visit_opt(node: Option<&Node>, f: &mut impl FnMut(&Node)) {
+    if let Some(node) = node {
+        node.visit(f);
+    }
+}
+
+/// Visits every node in a slice.
+fn visit_slice(nodes: &[Node], f: &mut impl FnMut(&Node)) {
+    for node in nodes {
+        node.visit(f);
+    }
+}
+
+impl Node {
+    /// Visits this node and all of its descendants in depth-first order.
+    ///
+    /// Unlike a plain AST walk, this follows the *resolved* structure:
+    /// substitutions nested inside opaque operands (parameter-expansion
+    /// arguments and subscripts, arithmetic bodies, conditional terms, and
+    /// unquoted here-document bodies) are reachable through the `parts`
+    /// fields on their owning nodes. Consumers can therefore inspect every
+    /// command without re-parsing expansion text themselves.
+    #[allow(clippy::too_many_lines, clippy::match_same_arms)]
+    pub fn visit(&self, f: &mut impl FnMut(&Self)) {
+        f(self);
+        match &self.kind {
+            NodeKind::Word { parts, .. }
+            | NodeKind::HereDoc { parts, .. }
+            | NodeKind::ParamExpansion { parts, .. }
+            | NodeKind::ParamIndirect { parts, .. }
+            | NodeKind::CondTerm { parts, .. } => visit_slice(parts, f),
+            NodeKind::Command {
+                assignments,
+                words,
+                redirects,
+            } => {
+                visit_slice(assignments, f);
+                visit_slice(words, f);
+                visit_slice(redirects, f);
+            }
+            NodeKind::Pipeline { commands, .. } => visit_slice(commands, f),
+            NodeKind::List { items } => {
+                for item in items {
+                    item.command.visit(f);
+                }
+            }
+            NodeKind::If {
+                condition,
+                then_body,
+                else_body,
+                redirects,
+            } => {
+                condition.visit(f);
+                then_body.visit(f);
+                visit_opt(else_body.as_deref(), f);
+                visit_slice(redirects, f);
+            }
+            NodeKind::While {
+                condition,
+                body,
+                redirects,
+            }
+            | NodeKind::Until {
+                condition,
+                body,
+                redirects,
+            } => {
+                condition.visit(f);
+                body.visit(f);
+                visit_slice(redirects, f);
+            }
+            NodeKind::For {
+                words,
+                body,
+                redirects,
+                ..
+            }
+            | NodeKind::Select {
+                words,
+                body,
+                redirects,
+                ..
+            } => {
+                if let Some(words) = words {
+                    visit_slice(words, f);
+                }
+                body.visit(f);
+                visit_slice(redirects, f);
+            }
+            NodeKind::ForArith {
+                body, redirects, ..
+            } => {
+                body.visit(f);
+                visit_slice(redirects, f);
+            }
+            NodeKind::Case {
+                word,
+                patterns,
+                redirects,
+            } => {
+                word.visit(f);
+                for item in patterns {
+                    visit_slice(&item.patterns, f);
+                    visit_opt(item.body.as_ref(), f);
+                }
+                visit_slice(redirects, f);
+            }
+            NodeKind::Function { body, .. }
+            | NodeKind::Coproc { command: body, .. }
+            | NodeKind::Negation { pipeline: body }
+            | NodeKind::Time { pipeline: body, .. } => body.visit(f),
+            NodeKind::Subshell { body, redirects } | NodeKind::BraceGroup { body, redirects } => {
+                body.visit(f);
+                visit_slice(redirects, f);
+            }
+            NodeKind::Redirect { target, .. } => target.visit(f),
+            NodeKind::CommandSubstitution { command, .. }
+            | NodeKind::ProcessSubstitution { command, .. } => command.visit(f),
+            NodeKind::ArithmeticExpansion {
+                expression, parts, ..
+            } => {
+                visit_opt(expression.as_deref(), f);
+                visit_slice(parts, f);
+            }
+            NodeKind::ArithmeticCommand {
+                expression,
+                redirects,
+                parts,
+                ..
+            } => {
+                visit_opt(expression.as_deref(), f);
+                visit_slice(redirects, f);
+                visit_slice(parts, f);
+            }
+            NodeKind::ArithBinaryOp { left, right, .. }
+            | NodeKind::ArithComma { left, right, .. } => {
+                left.visit(f);
+                right.visit(f);
+            }
+            NodeKind::ArithUnaryOp { operand, .. }
+            | NodeKind::ArithPreIncr { operand }
+            | NodeKind::ArithPostIncr { operand }
+            | NodeKind::ArithPreDecr { operand }
+            | NodeKind::ArithPostDecr { operand } => operand.visit(f),
+            NodeKind::ArithAssign { target, value, .. } => {
+                target.visit(f);
+                value.visit(f);
+            }
+            NodeKind::ArithTernary {
+                condition,
+                if_true,
+                if_false,
+            } => {
+                condition.visit(f);
+                visit_opt(if_true.as_deref(), f);
+                visit_opt(if_false.as_deref(), f);
+            }
+            NodeKind::ArithSubscript { index, .. } => index.visit(f),
+            NodeKind::ArithConcat { parts } => visit_slice(parts, f),
+            NodeKind::ConditionalExpr { body, redirects } => {
+                body.visit(f);
+                visit_slice(redirects, f);
+            }
+            NodeKind::UnaryTest { operand, .. } => operand.visit(f),
+            NodeKind::BinaryTest { left, right, .. }
+            | NodeKind::CondAnd { left, right }
+            | NodeKind::CondOr { left, right } => {
+                left.visit(f);
+                right.visit(f);
+            }
+            NodeKind::CondNot { operand } | NodeKind::CondParen { inner: operand } => {
+                operand.visit(f);
+            }
+            NodeKind::Array { elements } => visit_slice(elements, f),
+            NodeKind::WordLiteral { .. }
+            | NodeKind::ParamLength { .. }
+            | NodeKind::AnsiCQuote { .. }
+            | NodeKind::LocaleString { .. }
+            | NodeKind::BraceExpansion { .. }
+            | NodeKind::ArithNumber { .. }
+            | NodeKind::ArithVar { .. }
+            | NodeKind::ArithEmpty
+            | NodeKind::ArithEscape { .. }
+            | NodeKind::ArithDeprecated { .. }
+            | NodeKind::Empty
+            | NodeKind::Comment { .. } => {}
         }
     }
 }

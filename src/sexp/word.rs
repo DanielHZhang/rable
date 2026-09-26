@@ -135,20 +135,36 @@ fn write_procsub_segment(
 /// another sexp-relevant span) and treats everything else as literal.
 /// Uses span context to handle context-sensitive constructs like
 /// `$'...'` inside `${...}` vs inside `"..."`.
-pub fn segments_from_spans(
-    value: &str,
-    spans: &[crate::lexer::word_builder::WordSpan],
-) -> Vec<WordSegment> {
+pub fn segments_from_spans(value: &str, spans: &[WordSpan]) -> Vec<WordSegment> {
     build_segments(value, spans, is_sexp_relevant)
 }
 
-/// Like `segments_from_spans` but also decomposes parameter expansions
-/// and simple variables into their own segments (for `Word.parts`).
-pub fn segments_with_params(
-    value: &str,
-    spans: &[crate::lexer::word_builder::WordSpan],
-) -> Vec<WordSegment> {
-    build_segments(value, spans, is_decomposable)
+/// Builds the segments produced by a single span, without merging into a
+/// surrounding literal. Used by `Word.parts` construction so each span can
+/// be paired with the substitution body the lexer already parsed.
+pub fn span_segments(value: &str, span: &WordSpan) -> Vec<WordSegment> {
+    let mut segments = Vec::new();
+    span_to_segment(&mut segments, value, span);
+    segments
+}
+
+/// Indices of the top-level spans that `Word.parts` decomposition consumes.
+/// Indices (rather than references) let the caller move substitution bodies
+/// out of the spans while decomposing, so nested ASTs are not duplicated.
+pub fn top_level_decomposable_indices(spans: &[WordSpan]) -> Vec<usize> {
+    let mut relevant: Vec<usize> = (0..spans.len())
+        .filter(|&i| is_decomposable(&spans[i].kind))
+        .collect();
+    relevant.sort_by_key(|&i| spans[i].start);
+    let mut result = Vec::new();
+    let mut covered_until = 0usize;
+    for i in relevant {
+        if spans[i].start >= covered_until {
+            covered_until = spans[i].end;
+            result.push(i);
+        }
+    }
+    result
 }
 
 fn build_segments(
@@ -345,7 +361,7 @@ pub(super) fn fmt_word_like(f: &mut fmt::Formatter<'_>, kind: &NodeKind) -> fmt:
     match kind {
         NodeKind::Word { value, spans, .. } => fmt_word(f, value, spans),
         NodeKind::WordLiteral { value } => write!(f, "{value}"),
-        NodeKind::CondTerm { value, spans } => fmt_cond_term(f, value, spans),
+        NodeKind::CondTerm { value, spans, .. } => fmt_cond_term(f, value, spans),
         _ => unreachable!("fmt_word_like called with non-word-like variant"),
     }
 }

@@ -117,6 +117,7 @@ impl Parser {
                 quoted,
                 fd,
                 complete: true,
+                parts: Vec::new(),
             },
         ))
     }

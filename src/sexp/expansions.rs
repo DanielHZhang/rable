@@ -44,11 +44,11 @@ pub(super) fn write_arith_wrapper(
 /// ANSI-C, locale, brace, and arithmetic substitution.
 pub(super) fn fmt_expansion(f: &mut fmt::Formatter<'_>, kind: &NodeKind) -> fmt::Result {
     match kind {
-        NodeKind::ParamExpansion { param, op, arg } => {
+        NodeKind::ParamExpansion { param, op, arg, .. } => {
             write_param(f, "${{", param, op.as_deref(), arg.as_deref())
         }
         NodeKind::ParamLength { param } => write!(f, "${{#{param}}}"),
-        NodeKind::ParamIndirect { param, op, arg } => {
+        NodeKind::ParamIndirect { param, op, arg, .. } => {
             write_param(f, "${{!", param, op.as_deref(), arg.as_deref())
         }
         NodeKind::CommandSubstitution { command, brace } => {
@@ -61,7 +61,7 @@ pub(super) fn fmt_expansion(f: &mut fmt::Formatter<'_>, kind: &NodeKind) -> fmt:
         NodeKind::AnsiCQuote { content, .. } => write!(f, "$'{content}'"),
         NodeKind::LocaleString { content, .. } => write!(f, "$\"{content}\""),
         NodeKind::BraceExpansion { content } => write!(f, "{content}"),
-        NodeKind::ArithmeticExpansion { expression } => {
+        NodeKind::ArithmeticExpansion { expression, .. } => {
             write_arith_wrapper(f, "arith", expression.as_deref())
         }
         _ => unreachable!("fmt_expansion called with non-expansion variant"),

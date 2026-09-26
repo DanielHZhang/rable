@@ -145,14 +145,16 @@ impl Parser {
 /// position as the node span. Distinct from `helpers::word_node_from_token`,
 /// which uses `Node::empty` (no span) for AST constructors where positional
 /// information is not available.
-fn build_word_node(tok: Token) -> Node {
+fn build_word_node(mut tok: Token) -> Node {
     // `pos` is a character index; advance the span end by the token's char
     // count, not its byte length, so multibyte words span correctly (#383).
     let word_span = Span::new(tok.pos, tok.pos + tok.value.chars().count());
-    let parts = word_parts::decompose_word_with_spans(&tok.value, &tok.spans);
+    let parts = word_parts::decompose_word_with_spans(&tok.value, &mut tok.spans);
+    let dequoted = crate::parser::helpers::word_dequoted(&tok.value, &tok.spans);
     Node::new(
         NodeKind::Word {
             value: tok.value,
+            dequoted,
             parts,
             spans: tok.spans,
         },

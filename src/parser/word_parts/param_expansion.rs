@@ -1,8 +1,9 @@
 //! `$var`, `${var}`, `${#var}`, `${!var}`, and their operators.
 
 use crate::ast::{Node, NodeKind};
+use crate::lexer::word_builder::WordSpan;
 
-use super::literal_fallback;
+use super::{decompose_region, literal_fallback};
 
 /// Parses `$var` — strip leading `$`, remainder is the param name.
 pub(super) fn parse_simple_var(text: &str) -> Node {
@@ -11,16 +12,29 @@ pub(super) fn parse_simple_var(text: &str) -> Node {
         param: param.to_string(),
         op: None,
         arg: None,
+        parts: Vec::new(),
     })
 }
 
 /// Parses `${…}` — strip `${` and `}`, dispatch on inner prefix (`#`, `!`,
 /// or plain identifier) and build the appropriate expansion node.
-pub(super) fn parse_braced_param(text: &str) -> Node {
+///
+/// `value`/`spans`/`span` locate the expansion within its enclosing word so
+/// the body can be decomposed into nested parts without re-parsing.
+pub(super) fn parse_braced_param(
+    text: &str,
+    value: &str,
+    spans: &mut [WordSpan],
+    index: usize,
+) -> Node {
     let inner = match text.get(2..text.len().saturating_sub(1)) {
         Some(s) if !s.is_empty() => s,
         _ => return literal_fallback(text),
     };
+    // Spans recorded inside `${…}` are relative to the enclosing word; the
+    // body covers `text` minus the `${` and `}` delimiters.
+    let (start, end) = (spans[index].start, spans[index].end);
+    let body_parts = decompose_region(value, spans, start + 2, end.saturating_sub(1));
     let first = inner.as_bytes().first().copied();
     match first {
         // ${#var} — length prefix, unless inner is just "#" (special param)
@@ -33,12 +47,22 @@ pub(super) fn parse_braced_param(text: &str) -> Node {
         // ${!var} — indirect prefix, unless inner is just "!" (special param)
         Some(b'!') if inner.len() > 1 => {
             let (param, op, arg) = extract_param_op_arg(&inner[1..]);
-            Node::empty(NodeKind::ParamIndirect { param, op, arg })
+            Node::empty(NodeKind::ParamIndirect {
+                param,
+                op,
+                arg,
+                parts: body_parts,
+            })
         }
         // ${var}[...] or ${var:op:arg}
         _ => {
             let (param, op, arg) = extract_param_op_arg(inner);
-            Node::empty(NodeKind::ParamExpansion { param, op, arg })
+            Node::empty(NodeKind::ParamExpansion {
+                param,
+                op,
+                arg,
+                parts: body_parts,
+            })
         }
     }
 }

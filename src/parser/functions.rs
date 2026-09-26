@@ -214,6 +214,7 @@ impl Parser {
         self.expect(TokenType::LeftParen)?;
         self.expect(TokenType::LeftParen)?;
         let content = self.lexer.read_until_double_paren()?;
+        let parts = self.lexer.decompose_fragment(&content);
         let redirects = self.parse_trailing_redirects()?;
         Ok(self.spanned(
             start,
@@ -221,6 +222,7 @@ impl Parser {
                 expression: None,
                 redirects,
                 raw_content: content,
+                parts,
             },
         ))
     }
