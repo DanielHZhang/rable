@@ -1,3 +1,5 @@
+use std::ops::ControlFlow;
+
 use crate::lexer::word_builder::{QuotingContext, WordSpanKind};
 
 /// Source span representing a **character** range in the original input.
@@ -471,18 +473,20 @@ impl CasePattern {
     }
 }
 
-/// Visits `Option<&Node>` if present.
-fn visit_opt(node: Option<&Node>, f: &mut impl FnMut(&Node)) {
-    if let Some(node) = node {
-        node.visit(f);
-    }
+/// Visits `Option<&Node>` if present, propagating an early [`ControlFlow::Break`].
+fn visit_opt<B>(
+    node: Option<&Node>,
+    f: &mut impl FnMut(&Node) -> ControlFlow<B>,
+) -> ControlFlow<B> {
+    node.map_or_else(|| ControlFlow::Continue(()), |node| node.visit(f))
 }
 
-/// Visits every node in a slice.
-fn visit_slice(nodes: &[Node], f: &mut impl FnMut(&Node)) {
+/// Visits every node in a slice until one breaks the flow.
+fn visit_slice<B>(nodes: &[Node], f: &mut impl FnMut(&Node) -> ControlFlow<B>) -> ControlFlow<B> {
     for node in nodes {
-        node.visit(f);
+        node.visit(f)?;
     }
+    ControlFlow::Continue(())
 }
 
 impl Node {
@@ -494,9 +498,14 @@ impl Node {
     /// unquoted here-document bodies) are reachable through the `parts`
     /// fields on their owning nodes. Consumers can therefore inspect every
     /// command without re-parsing expansion text themselves.
+    ///
+    /// The callback returns [`ControlFlow::Continue`] to keep walking or
+    /// [`ControlFlow::Break`] to stop the traversal immediately; `visit` then
+    /// returns that `Break` without touching the remaining nodes. Callers that
+    /// need the whole tree always return `Continue`.
     #[allow(clippy::too_many_lines, clippy::match_same_arms)]
-    pub fn visit(&self, f: &mut impl FnMut(&Self)) {
-        f(self);
+    pub fn visit<B>(&self, f: &mut impl FnMut(&Self) -> ControlFlow<B>) -> ControlFlow<B> {
+        f(self)?;
         match &self.kind {
             NodeKind::Word { parts, .. }
             | NodeKind::HereDoc { parts, .. }
@@ -508,15 +517,16 @@ impl Node {
                 words,
                 redirects,
             } => {
-                visit_slice(assignments, f);
-                visit_slice(words, f);
-                visit_slice(redirects, f);
+                visit_slice(assignments, f)?;
+                visit_slice(words, f)?;
+                visit_slice(redirects, f)
             }
             NodeKind::Pipeline { commands, .. } => visit_slice(commands, f),
             NodeKind::List { items } => {
                 for item in items {
-                    item.command.visit(f);
+                    item.command.visit(f)?;
                 }
+                ControlFlow::Continue(())
             }
             NodeKind::If {
                 condition,
@@ -524,10 +534,10 @@ impl Node {
                 else_body,
                 redirects,
             } => {
-                condition.visit(f);
-                then_body.visit(f);
-                visit_opt(else_body.as_deref(), f);
-                visit_slice(redirects, f);
+                condition.visit(f)?;
+                then_body.visit(f)?;
+                visit_opt(else_body.as_deref(), f)?;
+                visit_slice(redirects, f)
             }
             NodeKind::While {
                 condition,
@@ -539,9 +549,9 @@ impl Node {
                 body,
                 redirects,
             } => {
-                condition.visit(f);
-                body.visit(f);
-                visit_slice(redirects, f);
+                condition.visit(f)?;
+                body.visit(f)?;
+                visit_slice(redirects, f)
             }
             NodeKind::For {
                 words,
@@ -556,36 +566,36 @@ impl Node {
                 ..
             } => {
                 if let Some(words) = words {
-                    visit_slice(words, f);
+                    visit_slice(words, f)?;
                 }
-                body.visit(f);
-                visit_slice(redirects, f);
+                body.visit(f)?;
+                visit_slice(redirects, f)
             }
             NodeKind::ForArith {
                 body, redirects, ..
             } => {
-                body.visit(f);
-                visit_slice(redirects, f);
+                body.visit(f)?;
+                visit_slice(redirects, f)
             }
             NodeKind::Case {
                 word,
                 patterns,
                 redirects,
             } => {
-                word.visit(f);
+                word.visit(f)?;
                 for item in patterns {
-                    visit_slice(&item.patterns, f);
-                    visit_opt(item.body.as_ref(), f);
+                    visit_slice(&item.patterns, f)?;
+                    visit_opt(item.body.as_ref(), f)?;
                 }
-                visit_slice(redirects, f);
+                visit_slice(redirects, f)
             }
             NodeKind::Function { body, .. }
             | NodeKind::Coproc { command: body, .. }
             | NodeKind::Negation { pipeline: body }
             | NodeKind::Time { pipeline: body, .. } => body.visit(f),
             NodeKind::Subshell { body, redirects } | NodeKind::BraceGroup { body, redirects } => {
-                body.visit(f);
-                visit_slice(redirects, f);
+                body.visit(f)?;
+                visit_slice(redirects, f)
             }
             NodeKind::Redirect { target, .. } => target.visit(f),
             NodeKind::CommandSubstitution { command, .. }
@@ -593,8 +603,8 @@ impl Node {
             NodeKind::ArithmeticExpansion {
                 expression, parts, ..
             } => {
-                visit_opt(expression.as_deref(), f);
-                visit_slice(parts, f);
+                visit_opt(expression.as_deref(), f)?;
+                visit_slice(parts, f)
             }
             NodeKind::ArithmeticCommand {
                 expression,
@@ -602,14 +612,14 @@ impl Node {
                 parts,
                 ..
             } => {
-                visit_opt(expression.as_deref(), f);
-                visit_slice(redirects, f);
-                visit_slice(parts, f);
+                visit_opt(expression.as_deref(), f)?;
+                visit_slice(redirects, f)?;
+                visit_slice(parts, f)
             }
             NodeKind::ArithBinaryOp { left, right, .. }
             | NodeKind::ArithComma { left, right, .. } => {
-                left.visit(f);
-                right.visit(f);
+                left.visit(f)?;
+                right.visit(f)
             }
             NodeKind::ArithUnaryOp { operand, .. }
             | NodeKind::ArithPreIncr { operand }
@@ -617,33 +627,33 @@ impl Node {
             | NodeKind::ArithPreDecr { operand }
             | NodeKind::ArithPostDecr { operand } => operand.visit(f),
             NodeKind::ArithAssign { target, value, .. } => {
-                target.visit(f);
-                value.visit(f);
+                target.visit(f)?;
+                value.visit(f)
             }
             NodeKind::ArithTernary {
                 condition,
                 if_true,
                 if_false,
             } => {
-                condition.visit(f);
-                visit_opt(if_true.as_deref(), f);
-                visit_opt(if_false.as_deref(), f);
+                condition.visit(f)?;
+                visit_opt(if_true.as_deref(), f)?;
+                visit_opt(if_false.as_deref(), f)
             }
             NodeKind::ArithSubscript { index, .. } => index.visit(f),
             NodeKind::ArithConcat { parts } => visit_slice(parts, f),
             NodeKind::ConditionalExpr { body, redirects } => {
-                body.visit(f);
-                visit_slice(redirects, f);
+                body.visit(f)?;
+                visit_slice(redirects, f)
             }
             NodeKind::UnaryTest { operand, .. } => operand.visit(f),
             NodeKind::BinaryTest { left, right, .. }
             | NodeKind::CondAnd { left, right }
             | NodeKind::CondOr { left, right } => {
-                left.visit(f);
-                right.visit(f);
+                left.visit(f)?;
+                right.visit(f)
             }
             NodeKind::CondNot { operand } | NodeKind::CondParen { inner: operand } => {
-                operand.visit(f);
+                operand.visit(f)
             }
             NodeKind::Array { elements } => visit_slice(elements, f),
             NodeKind::WordLiteral { .. }
@@ -657,7 +667,7 @@ impl Node {
             | NodeKind::ArithEscape { .. }
             | NodeKind::ArithDeprecated { .. }
             | NodeKind::Empty
-            | NodeKind::Comment { .. } => {}
+            | NodeKind::Comment { .. } => ControlFlow::Continue(()),
         }
     }
 }

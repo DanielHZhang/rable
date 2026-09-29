@@ -2,6 +2,8 @@
 //! Tests for the resolved-nesting additions: dequoted word values and the
 //! structured `parts` that expose substitutions inside opaque operands.
 
+use std::ops::ControlFlow;
+
 use rable::NodeKind;
 
 /// Collects the dequoted command names of every simple command reachable
@@ -10,7 +12,7 @@ fn names(source: &str) -> Vec<String> {
     let nodes = rable::parse(source, false).expect("parse");
     let mut out = Vec::new();
     for node in &nodes {
-        node.visit(&mut |node| {
+        let _ = node.visit(&mut |node| {
             if let NodeKind::Command { words, .. } = &node.kind
                 && let Some(NodeKind::Word {
                     dequoted: Some(name),
@@ -19,6 +21,7 @@ fn names(source: &str) -> Vec<String> {
             {
                 out.push(name.clone());
             }
+            ControlFlow::<()>::Continue(())
         });
     }
     out
@@ -116,5 +119,36 @@ fn deeply_nested_substitutions_parse_in_linear_time() {
         start.elapsed() < std::time::Duration::from_millis(200),
         "deep nesting took {:?}",
         start.elapsed()
+    );
+}
+
+#[test]
+fn visit_stops_at_the_first_break() {
+    let nodes = rable::parse("echo a; echo b; echo c", false).expect("parse");
+
+    let count = |stop: bool| {
+        let mut seen = 0;
+        for node in &nodes {
+            let flow = node.visit(&mut |_| {
+                seen += 1;
+                if stop && seen == 2 {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            });
+            if flow.is_break() {
+                break;
+            }
+        }
+        seen
+    };
+
+    let full = count(false);
+    let partial = count(true);
+    assert_eq!(partial, 2);
+    assert!(
+        partial < full,
+        "expected early stop, saw {partial} of {full}"
     );
 }
