@@ -3,7 +3,7 @@
 //! inputs like `$($($($($(…))))))`.
 
 use crate::ast::{ListItem, Node, NodeKind, Span};
-use crate::lexer::word_builder::WordSpan;
+use crate::word_span::WordSpan;
 
 use super::{DepthGuard, decompose_region, literal_fallback};
 

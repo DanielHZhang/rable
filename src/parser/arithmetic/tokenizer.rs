@@ -166,7 +166,7 @@ fn tokenize_operator(source: &str, start: usize) -> Result<(Tok, usize)> {
     )))
 }
 
-fn match_three(pair: &[u8]) -> Option<Tok> {
+const fn match_three(pair: &[u8]) -> Option<Tok> {
     Some(match pair {
         b"<<=" => Tok::ShlAssign,
         b">>=" => Tok::ShrAssign,
@@ -174,7 +174,7 @@ fn match_three(pair: &[u8]) -> Option<Tok> {
     })
 }
 
-fn match_two(pair: &[u8]) -> Option<Tok> {
+const fn match_two(pair: &[u8]) -> Option<Tok> {
     Some(match pair {
         b"**" => Tok::Power,
         b"<<" => Tok::Shl,

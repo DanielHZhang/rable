@@ -16,8 +16,8 @@
 use std::cell::Cell;
 
 use crate::ast::{Node, NodeKind};
-use crate::lexer::word_builder::{WordSpan, WordSpanKind};
 use crate::sexp::word::WordSegment;
+use crate::word_span::{WordSpan, WordSpanKind};
 
 mod ansi_c;
 mod dequote;

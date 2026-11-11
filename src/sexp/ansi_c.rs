@@ -192,7 +192,7 @@ fn read_hex(chars: &[char], pos: &mut usize, max: usize) -> u32 {
 
 /// Advances `pos` to just past the closing `'` — used when a NUL-valued
 /// escape truncates the quoted string per bash semantics.
-fn skip_to_closing_quote(chars: &[char], pos: &mut usize) {
+const fn skip_to_closing_quote(chars: &[char], pos: &mut usize) {
     while *pos < chars.len() && chars[*pos] != '\'' {
         *pos += 1;
     }

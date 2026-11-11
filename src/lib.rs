@@ -65,6 +65,7 @@
 pub mod ast;
 pub mod error;
 pub mod token;
+mod word_span;
 
 // Public for advanced use (S-expression formatting)
 pub mod sexp;
@@ -82,6 +83,7 @@ mod python;
 pub use ast::{CasePattern, ListItem, ListOperator, Node, NodeKind, PipeSep, Span};
 pub use error::{RableError, Result};
 pub use token::{Token, TokenType};
+pub use word_span::{QuotingContext, WordSpan, WordSpanKind};
 
 /// Parses a bash source string into a list of top-level AST nodes.
 ///

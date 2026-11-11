@@ -7,34 +7,11 @@
 //! quoting context at the point of recording. This eliminates the need
 //! for downstream code to re-parse word values.
 //!
-//! The `WordSpan` type itself lives in `crate::ast` — its fields are
+//! The `WordSpan` type itself lives in `crate::word_span` — its fields are
 //! `pub(crate)` and construction happens here via the `record()` method on
-//! `WordBuilder`. This keeps the AST opaque to external consumers while
-//! letting the lexer populate spans internally.
+//! `WordBuilder`, so consumers can read spans but never forge them.
 
-pub(crate) use crate::ast::WordSpan;
-
-/// The quoting context at the point where a span was recorded.
-///
-/// Bash has context-sensitive expansion rules. For example, `$'...'`
-/// is an ANSI-C quote at top level or inside `${...}`, but is NOT
-/// special inside `"..."` (it's just literal `$` + `'...'`).
-///
-/// Each span captures the context stack so downstream consumers can
-/// make correct decisions without re-deriving context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum QuotingContext {
-    /// Top-level word context (no quoting).
-    None,
-    /// Inside double quotes `"..."`.
-    DoubleQuote,
-    /// Inside parameter expansion `${...}` (resets quoting context).
-    ParamExpansion,
-    /// Inside command substitution `$(...)` (resets quoting context).
-    CommandSub,
-    /// Inside backtick command substitution `` `...` ``.
-    Backtick,
-}
+use crate::word_span::{QuotingContext, WordSpan, WordSpanKind};
 
 /// Accumulates a word token's value string and expansion spans.
 pub(crate) struct WordBuilder {
@@ -114,43 +91,4 @@ impl WordBuilder {
     pub(crate) fn leave_context(&mut self) {
         self.context_stack.pop();
     }
-}
-
-/// The kind of expansion or quoting construct a `WordSpan` represents.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub(crate) enum WordSpanKind {
-    // -- Sexp-relevant (formatter extracts content from these) --
-    /// Command substitution: `$(...)`.
-    CommandSub,
-    /// ANSI-C quoting: `$'...'`.
-    AnsiCQuote,
-    /// Locale translation string: `$"..."`.
-    LocaleString,
-    /// Process substitution: `<(...)` or `>(...)`.
-    ProcessSub(char),
-
-    // -- Structural (formatter treats as literal text) --
-    /// Single-quoted string: `'...'`.
-    SingleQuoted,
-    /// Double-quoted string: `"..."`.
-    DoubleQuoted,
-    /// Parameter expansion: `${...}`.
-    ParamExpansion,
-    /// Simple variable: `$VAR`.
-    SimpleVar,
-    /// Arithmetic substitution: `$((...))`.
-    ArithmeticSub,
-    /// Backtick command substitution: `` `...` ``.
-    Backtick,
-    /// Array subscript: `[...]`.
-    BracketSubscript,
-    /// Extended glob pattern: `@(...)`, `?(...)`, etc.
-    Extglob(char),
-    /// Deprecated arithmetic: `$[...]`.
-    DeprecatedArith,
-    /// Backslash escape: `\X` (not `\<newline>` line continuations).
-    Escape,
-    /// Brace expansion: `{a,b,c}` or `{1..10}`.
-    BraceExpansion,
 }

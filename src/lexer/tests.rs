@@ -339,7 +339,7 @@ fn extglob_disabled_does_not_absorb_paren() {
 
 // -- Span recording tests --
 
-use super::word_builder::{WordSpan, WordSpanKind};
+use crate::word_span::{WordSpan, WordSpanKind};
 
 #[allow(clippy::unwrap_used)]
 fn first_word_spans(source: &str) -> (String, Vec<WordSpan>) {

@@ -22,6 +22,7 @@
 |---|---|
 | `src/lib.rs` | Library re-exports, public `parse()` entry point |
 | `src/ast.rs` | `Node` struct, `NodeKind` enum with 50+ variants, `Span` |
+| `src/word_span.rs` | `WordSpan` (expansion/quoting constructs inside words), `WordSpanKind`, `QuotingContext` |
 | `src/token.rs` | `TokenType` enum (62 variants), `Token` struct |
 | `src/error.rs` | `RableError` (Parse / MatchedPair) via thiserror |
 | `src/context.rs` | Parsing context and state management |

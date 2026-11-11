@@ -126,8 +126,7 @@ impl Parser {
         let adjacent = self
             .lexer
             .peek_token()
-            .map(|next| tok.adjacent_to(next))
-            .unwrap_or(false);
+            .is_ok_and(|next| tok.adjacent_to(next));
         if !adjacent {
             return Ok(None);
         }
@@ -146,9 +145,7 @@ impl Parser {
 /// which uses `Node::empty` (no span) for AST constructors where positional
 /// information is not available.
 fn build_word_node(mut tok: Token) -> Node {
-    // `pos` is a character index; advance the span end by the token's char
-    // count, not its byte length, so multibyte words span correctly (#383).
-    let word_span = Span::new(tok.pos, tok.pos + tok.value.chars().count());
+    let word_span = Span::new(tok.pos, tok.end);
     let parts = word_parts::decompose_word_with_spans(&tok.value, &mut tok.spans);
     let dequoted = crate::parser::helpers::word_dequoted(&tok.value, &tok.spans);
     Node::new(

@@ -1,7 +1,7 @@
 //! `$var`, `${var}`, `${#var}`, `${!var}`, and their operators.
 
 use crate::ast::{Node, NodeKind};
-use crate::lexer::word_builder::WordSpan;
+use crate::word_span::WordSpan;
 
 use super::{decompose_region, literal_fallback};
 

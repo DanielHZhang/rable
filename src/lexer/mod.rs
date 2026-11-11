@@ -11,6 +11,7 @@ pub(crate) mod heredoc;
 mod operators;
 mod quotes;
 pub(super) mod word_builder;
+mod word_shape;
 mod words;
 
 #[cfg(test)]
@@ -19,6 +20,7 @@ mod backtick_opaque_tests;
 mod tests;
 
 pub(crate) use heredoc::PendingHereDoc;
+pub(crate) use word_shape::assignment_value_start;
 
 /// Immutable lexer configuration set at construction time.
 #[derive(Debug, Clone, Copy)]
@@ -56,7 +58,8 @@ impl Default for LexerContext {
 
 /// Hand-written context-sensitive lexer for bash.
 pub(crate) struct Lexer {
-    input: Rc<[char]>,
+    /// The source text. Every position is a byte offset into it.
+    input: Rc<str>,
     pos: usize,
     line: usize,
     peeked: Option<Token>,
@@ -66,7 +69,7 @@ pub(crate) struct Lexer {
     pub(crate) pending_heredocs: Vec<PendingHereDoc>,
     /// Completed here-document contents (filled after newline).
     pub(crate) heredoc_contents: Vec<String>,
-    /// End position (char index) of the most recently consumed token.
+    /// End position (byte offset) of the most recently consumed token.
     last_token_end: usize,
     /// Which nested construct, if any, this lexer is a fork of.
     /// See [`LexerMode`] for the per-mode behaviour.
@@ -161,7 +164,7 @@ impl Lexer {
 impl Lexer {
     pub(crate) fn new(source: &str, extglob: bool) -> Self {
         Self {
-            input: source.chars().collect::<Vec<_>>().into(),
+            input: source.into(),
             pos: 0,
             line: 1,
             peeked: None,
@@ -206,7 +209,7 @@ impl Lexer {
     /// fork. Bypasses `at_end` (which returns true on that byte in
     /// backtick mode). Only called by `parse_backtick_body`.
     pub(crate) fn exit_backtick_fork(&mut self) -> Result<()> {
-        if self.input.get(self.pos).copied() != Some('`') {
+        if self.peek_char() != Some('`') {
             return Err(RableError::matched_pair(
                 "unterminated backtick",
                 self.pos,
@@ -222,7 +225,7 @@ impl Lexer {
         self.pos
     }
 
-    /// Returns the end position (char index) of the most recently consumed token.
+    /// Returns the end position (byte offset) of the most recently consumed token.
     pub(crate) const fn last_token_end(&self) -> usize {
         self.last_token_end
     }
@@ -232,7 +235,7 @@ impl Lexer {
         self.line
     }
 
-    /// Returns the total input length.
+    /// Returns the total input length in bytes.
     pub(crate) fn input_len(&self) -> usize {
         self.input.len()
     }
@@ -241,9 +244,7 @@ impl Lexer {
     /// Used to detect `((` — the first `(` is peeked as `LeftParen`,
     /// and we check if the next raw character is also `(`.
     pub(crate) fn char_after_peeked(&self) -> Option<char> {
-        // The peeked token consumed `(` at self.pos-1 (or wherever)
-        // We need to check the char at the current pos
-        self.input.get(self.pos).copied()
+        self.peek_char()
     }
 
     /// Returns true if at end of input.
@@ -253,14 +254,21 @@ impl Lexer {
 
     /// Peeks at the current character without advancing.
     fn peek_char(&self) -> Option<char> {
-        self.input.get(self.pos).copied()
+        self.input.get(self.pos..)?.chars().next()
+    }
+
+    /// Peeks at the character after the current one without advancing.
+    fn peek_second_char(&self) -> Option<char> {
+        let mut chars = self.input.get(self.pos..)?.chars();
+        chars.next();
+        chars.next()
     }
 
     /// Advances one character and returns it.
     fn advance_char(&mut self) -> Option<char> {
-        let ch = self.input.get(self.pos).copied();
+        let ch = self.peek_char();
         if let Some(c) = ch {
-            self.pos += 1;
+            self.pos += c.len_utf8();
             if c == '\n' {
                 self.line += 1;
             }
@@ -272,7 +280,7 @@ impl Lexer {
     /// (raw backtick byte in backtick mode). Used by `read_token` to
     /// emit `Eof` and by `read_word_token` to terminate word reading.
     pub(crate) fn at_backtick_terminator(&self) -> bool {
-        self.mode == LexerMode::Backtick && self.input.get(self.pos).copied() == Some('`')
+        self.mode == LexerMode::Backtick && self.peek_char() == Some('`')
     }
 
     /// Skips blanks (spaces and tabs) and line continuations (`\<newline>`).
@@ -284,7 +292,7 @@ impl Lexer {
                 }
                 Some('\\') => {
                     // Line continuation: \<newline> → skip both
-                    if self.input.get(self.pos + 1) == Some(&'\n') {
+                    if self.peek_second_char() == Some('\n') {
                         self.advance_char(); // skip \
                         self.advance_char(); // skip \n
                     } else {
@@ -317,11 +325,7 @@ impl Lexer {
         } else {
             self.read_token()?
         };
-        // `pos` is a character index (the lexer scans a `Vec<char>`), so the
-        // span end must advance by the token's character count, not its byte
-        // length. Using `value.len()` (bytes) corrupts spans for any token
-        // containing multibyte UTF-8 (tokf #383).
-        self.last_token_end = tok.pos + tok.value.chars().count();
+        self.last_token_end = tok.end;
         Ok(tok)
     }
 
@@ -392,7 +396,7 @@ impl Lexer {
             }
             '<' => {
                 // Check for <( process substitution
-                if self.input.get(self.pos + 1) == Some(&'(') {
+                if self.peek_second_char() == Some('(') {
                     self.read_process_sub_word(start, line)
                 } else {
                     Ok(self.read_less_operator(start, line))
@@ -400,7 +404,7 @@ impl Lexer {
             }
             '>' => {
                 // Check for >( process substitution
-                if self.input.get(self.pos + 1) == Some(&'(') {
+                if self.peek_second_char() == Some('(') {
                     self.read_process_sub_word(start, line)
                 } else {
                     Ok(self.read_greater_operator(start, line))

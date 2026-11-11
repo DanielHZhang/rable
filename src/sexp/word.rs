@@ -8,7 +8,7 @@ use std::fmt;
 
 use crate::ast::NodeKind;
 use crate::format;
-use crate::lexer::word_builder::WordSpan;
+use crate::word_span::WordSpan;
 
 use super::{
     ansi_c::process_ansi_c_content, normalize_cmdsub_content, write_escaped_char,
@@ -169,8 +169,8 @@ pub fn top_level_decomposable_indices(spans: &[WordSpan]) -> Vec<usize> {
 
 fn build_segments(
     value: &str,
-    spans: &[crate::lexer::word_builder::WordSpan],
-    filter: fn(&crate::lexer::word_builder::WordSpanKind) -> bool,
+    spans: &[crate::word_span::WordSpan],
+    filter: fn(&crate::word_span::WordSpanKind) -> bool,
 ) -> Vec<WordSegment> {
     let top_level = collect_filtered_spans(spans, filter);
     let mut segments = Vec::new();
@@ -196,9 +196,9 @@ fn build_segments(
 fn span_to_segment(
     segments: &mut Vec<WordSegment>,
     value: &str,
-    span: &crate::lexer::word_builder::WordSpan,
+    span: &crate::word_span::WordSpan,
 ) {
-    use crate::lexer::word_builder::{QuotingContext, WordSpanKind};
+    use crate::word_span::{QuotingContext, WordSpanKind};
     match &span.kind {
         WordSpanKind::CommandSub => {
             if let Some(c) = value.get(span.start + 2..span.end - 1) {
@@ -266,9 +266,9 @@ fn span_to_segment(
 fn push_ansi_c_span(
     segments: &mut Vec<WordSegment>,
     value: &str,
-    span: &crate::lexer::word_builder::WordSpan,
+    span: &crate::word_span::WordSpan,
 ) {
-    use crate::lexer::word_builder::QuotingContext;
+    use crate::word_span::QuotingContext;
     match span.context {
         QuotingContext::DoubleQuote => {
             // $'...' is NOT special inside "..." — treat as literal
@@ -303,8 +303,8 @@ fn push_literal(segments: &mut Vec<WordSegment>, text: &str) {
     }
 }
 
-const fn is_sexp_relevant(kind: &crate::lexer::word_builder::WordSpanKind) -> bool {
-    use crate::lexer::word_builder::WordSpanKind;
+const fn is_sexp_relevant(kind: &crate::word_span::WordSpanKind) -> bool {
+    use crate::word_span::WordSpanKind;
     matches!(
         kind,
         WordSpanKind::CommandSub
@@ -321,8 +321,8 @@ const fn is_sexp_relevant(kind: &crate::lexer::word_builder::WordSpanKind) -> bo
 /// [`is_sexp_relevant`] — this keeps `$((...))` as literal text in the
 /// S-expression word output (preserving the Parable corpus expectations)
 /// while still exposing a typed `ArithmeticExpansion` node in `Word.parts`.
-const fn is_decomposable(kind: &crate::lexer::word_builder::WordSpanKind) -> bool {
-    use crate::lexer::word_builder::WordSpanKind;
+const fn is_decomposable(kind: &crate::word_span::WordSpanKind) -> bool {
+    use crate::word_span::WordSpanKind;
     if is_sexp_relevant(kind) {
         return true;
     }
@@ -339,9 +339,9 @@ const fn is_decomposable(kind: &crate::lexer::word_builder::WordSpanKind) -> boo
 /// Collects top-level spans matching `filter`, sorted by start offset.
 /// A span is top-level if no other matching span fully contains it.
 fn collect_filtered_spans(
-    spans: &[crate::lexer::word_builder::WordSpan],
-    filter: fn(&crate::lexer::word_builder::WordSpanKind) -> bool,
-) -> Vec<&crate::lexer::word_builder::WordSpan> {
+    spans: &[crate::word_span::WordSpan],
+    filter: fn(&crate::word_span::WordSpanKind) -> bool,
+) -> Vec<&crate::word_span::WordSpan> {
     let mut relevant: Vec<_> = spans.iter().filter(|s| filter(&s.kind)).collect();
     relevant.sort_by_key(|s| s.start);
     // Single pass: skip spans nested inside a previously collected one

@@ -2,22 +2,26 @@
 //!
 //! Reduces a raw word's source text to the literal string bash would use
 //! after quote removal, when that value is statically knowable. Returns
-//! `None` as soon as an expansion (`$var`, `${…}`, `$(…)`, backticks) is
-//! encountered, since its runtime value cannot be known statically.
+//! `None` as soon as an expansion (`$var`, `${…}`, `$(…)`, backticks, tilde
+//! prefixes) is encountered, since its runtime value cannot be known
+//! statically.
+
+use crate::lexer::assignment_value_start;
 
 /// Dequotes a raw word value, returning the literal text after removing
 /// quoting and backslash escapes. Returns `None` when the word contains
 /// an expansion and therefore has no static value.
 ///
-/// This deliberately models only quoting/escaping: `~`, globs, and brace
-/// expansions are left verbatim, matching how they appear after quote
-/// removal.
+/// Globs and brace expansions are left verbatim, matching how they appear
+/// after quote removal.
 pub fn dequote(raw: &str) -> Option<String> {
     let chars: Vec<char> = raw.chars().collect();
+    let assignment = assignment_value_start(raw).map(|value| raw[..value].chars().count());
     let mut out = String::new();
     let mut i = 0;
     while i < chars.len() {
         match chars[i] {
+            '~' if is_tilde_prefix(&chars, i, assignment) => return None,
             '\'' => i = copy_single_quoted(&chars, i + 1, &mut out),
             '"' => i = copy_double_quoted(&chars, i + 1, &mut out)?,
             '$' => {
@@ -36,6 +40,22 @@ pub fn dequote(raw: &str) -> Option<String> {
         }
     }
     Some(out)
+}
+
+/// Whether the unquoted `~` at `i` starts a tilde prefix that bash expands.
+///
+/// Bash expands a tilde at the start of a word and, in assignment-shaped
+/// words (whose value starts at char index `assignment`), after the `=` and
+/// after each `:` of the value. The prefix runs to the next `/` (or `:` in an
+/// assignment) and is left literal when any of it is quoted.
+fn is_tilde_prefix(chars: &[char], i: usize, assignment: Option<usize>) -> bool {
+    let starts =
+        i == 0 || assignment.is_some_and(|value| i == value || (i > value && chars[i - 1] == ':'));
+    starts
+        && chars[i + 1..]
+            .iter()
+            .take_while(|&&c| c != '/' && !(assignment.is_some() && c == ':'))
+            .all(|c| !matches!(c, '\'' | '"' | '\\' | '$' | '`'))
 }
 
 /// Copies a single-quoted section (text through the closing quote) and

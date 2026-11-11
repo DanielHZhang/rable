@@ -72,6 +72,54 @@ fn dynamic_words_have_no_static_value() {
     }
 }
 
+/// The dequoted value of each word of the first command in `source`.
+fn words_dequoted(source: &str) -> Vec<Option<String>> {
+    let nodes = rable::parse(source, false).expect("parse");
+    let Some(NodeKind::Command { words, .. }) = nodes.first().map(|node| &node.kind) else {
+        return Vec::new();
+    };
+    words
+        .iter()
+        .map(|word| match &word.kind {
+            NodeKind::Word { dequoted, .. } => dequoted.clone(),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn tilde_prefixes_have_no_static_value() {
+    for source in [
+        "echo ~",
+        "echo ~/x",
+        "echo ~root/x",
+        "echo ~+",
+        "echo a=~/x",
+        "echo a=b:~/x",
+    ] {
+        assert_eq!(words_dequoted(source)[1], None, "source: {source:?}");
+    }
+}
+
+#[test]
+fn quoted_or_embedded_tildes_are_literal() {
+    for (source, expected) in [
+        ("echo '~'", "~"),
+        ("echo \\~", "~"),
+        ("echo \"~\"/x", "~/x"),
+        ("echo ~'/x'", "~/x"),
+        ("echo x~", "x~"),
+        ("echo x:~", "x:~"),
+        ("echo a=x~", "a=x~"),
+    ] {
+        assert_eq!(
+            words_dequoted(source)[1].as_deref(),
+            Some(expected),
+            "source: {source:?}"
+        );
+    }
+}
+
 #[test]
 fn finds_command_nested_in_parameter_expansion() {
     assert_eq!(names("echo ${x:-$(sudo true)}"), ["echo", "sudo"]);

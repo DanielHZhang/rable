@@ -26,7 +26,7 @@ impl RableError {
         }
     }
 
-    /// Returns the character position where the error occurred (0-based).
+    /// Returns the byte offset in the source where the error occurred.
     pub const fn pos(&self) -> usize {
         match self {
             Self::Parse { pos, .. } | Self::MatchedPair { pos, .. } => *pos,

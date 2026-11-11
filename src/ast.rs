@@ -1,36 +1,15 @@
 use std::ops::ControlFlow;
 
-use crate::lexer::word_builder::{QuotingContext, WordSpanKind};
+use crate::word_span::WordSpan;
 
-/// Source span representing a **character** range in the original input.
+/// Source span representing a **byte** range in the original input.
 ///
-/// Offsets are character indices (the lexer scans the source as a `Vec<char>`),
-/// not byte offsets — they diverge for multibyte UTF-8. Use
-/// [`Node::source_text`] to recover the source slice; it converts these
-/// character indices to byte offsets before slicing.
+/// Offsets always fall on UTF-8 character boundaries, so `&source[start..end]`
+/// is the node's source text (see [`Node::source_text`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
-}
-
-/// Opaque span metadata attached to `Word` and `CondTerm` nodes.
-///
-/// Records where each expansion starts/ends in the raw token text.
-/// External consumers see this type through the variant field but cannot
-/// read or construct it — the fields are crate-private.
-///
-/// `body` carries the already-parsed AST for command / process / backtick
-/// substitution spans. The lexer produces it while locating the matching
-/// delimiter, so word decomposition can reuse it instead of re-parsing the
-/// same source. It is `None` for every other span kind.
-#[derive(Debug, Clone, PartialEq)]
-pub struct WordSpan {
-    pub(crate) start: usize,
-    pub(crate) end: usize,
-    pub(crate) kind: WordSpanKind,
-    pub(crate) context: QuotingContext,
-    pub(crate) body: Option<Box<Node>>,
 }
 
 impl Span {
@@ -73,22 +52,12 @@ impl Node {
 
     /// Extracts the source text for this node from the original source string.
     ///
-    /// Spans use character indices (matching `Token.pos` semantics).
     /// Returns an empty string for synthetic nodes or invalid spans.
     pub fn source_text<'a>(&self, source: &'a str) -> &'a str {
         if self.span.is_empty() {
             return "";
         }
-        // Convert char indices to byte offsets
-        let byte_start = source.char_indices().nth(self.span.start).map(|(i, _)| i);
-        let byte_end = source
-            .char_indices()
-            .nth(self.span.end)
-            .map_or(source.len(), |(i, _)| i);
-        match byte_start {
-            Some(s) if byte_end <= source.len() => &source[s..byte_end],
-            _ => "",
-        }
+        source.get(self.span.start..self.span.end).unwrap_or("")
     }
 }
 

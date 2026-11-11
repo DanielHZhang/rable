@@ -4,7 +4,9 @@ use crate::error::{RableError, Result};
 use crate::token::{Token, TokenType};
 
 use super::Lexer;
-use super::word_builder::{WordBuilder, WordSpanKind};
+use super::word_builder::WordBuilder;
+use super::word_shape::{assignment_value_start, is_identifier_prefix};
+use crate::word_span::WordSpanKind;
 
 impl Lexer {
     /// Reads a word token, handling quoting and expansions.
@@ -56,7 +58,24 @@ impl Lexer {
 
         let kind = self.classify_word(&wb);
         self.advance_word_context(kind);
-        Ok(Token::with_spans(kind, wb.value, start, line, wb.spans))
+        Ok(Token::with_spans(
+            kind,
+            wb.value,
+            start..self.word_end(start),
+            line,
+            wb.spans,
+        ))
+    }
+
+    /// End of the word token that started at `start`: the current
+    /// position, less any line continuations the word reader consumed after
+    /// its last character.
+    fn word_end(&self, start: usize) -> usize {
+        let mut source = &self.input[start..self.pos];
+        while let Some(rest) = source.strip_suffix("\\\n") {
+            source = rest;
+        }
+        start + source.len()
     }
 
     // -- word-assembly dispatch helpers --
@@ -67,7 +86,7 @@ impl Lexer {
     /// character is a metacharacter that terminates the word, and we
     /// return `Break`.
     fn read_angle_bracket_word(&mut self, wb: &mut WordBuilder) -> Result<ControlFlow<()>> {
-        if !wb.is_empty() && self.input.get(self.pos + 1) == Some(&'(') {
+        if !wb.is_empty() && self.peek_second_char() == Some('(') {
             self.read_process_sub_into(wb)?;
             Ok(ControlFlow::Continue(()))
         } else {
@@ -107,7 +126,7 @@ impl Lexer {
     /// pattern: a prefix character (`@`, `?`, `+`, and `!`/`*` when
     /// `config.extglob` is enabled) followed immediately by `(`.
     fn is_extglob_trigger(&self, c: char) -> bool {
-        if self.input.get(self.pos + 1) != Some(&'(') {
+        if self.peek_second_char() != Some('(') {
             return false;
         }
         matches!(c, '@' | '?' | '+') || (matches!(c, '!' | '*') && self.config.extglob)
@@ -138,13 +157,13 @@ impl Lexer {
     fn classify_word(&self, wb: &WordBuilder) -> TokenType {
         let kind = if self.ctx.command_start && self.ctx.reserved_words_ok {
             TokenType::reserved_word(&wb.value).unwrap_or_else(|| {
-                if is_assignment_word(&wb.value) {
+                if assignment_value_start(&wb.value).is_some() {
                     TokenType::AssignmentWord
                 } else {
                     TokenType::Word
                 }
             })
-        } else if is_assignment_word(&wb.value) {
+        } else if assignment_value_start(&wb.value).is_some() {
             TokenType::AssignmentWord
         } else {
             TokenType::Word
@@ -336,7 +355,7 @@ impl Lexer {
         Ok(Token::with_spans(
             TokenType::Word,
             wb.value,
-            start,
+            start..self.word_end(start),
             line,
             wb.spans,
         ))
@@ -348,7 +367,7 @@ impl Lexer {
             match c {
                 ' ' | '\t' | '\n' | '|' | '&' | ';' | ')' | '(' => break,
                 '<' | '>' => {
-                    if self.input.get(self.pos + 1) == Some(&'(') {
+                    if self.peek_second_char() == Some('(') {
                         self.read_process_sub_into(wb)?;
                     } else {
                         break;
@@ -417,7 +436,7 @@ impl Lexer {
             match c {
                 ' ' | '\t' | '\n' | '\r' | ')' => break,
                 '<' | '>' => {
-                    if self.input.get(self.pos + 1) == Some(&'(') {
+                    if self.peek_second_char() == Some('(') {
                         self.read_process_sub_into(wb)?;
                     } else {
                         self.advance_char();
@@ -435,60 +454,4 @@ impl Lexer {
         }
         Ok(())
     }
-}
-
-/// Returns true if `value` is a non-empty plain bash identifier
-/// (`[a-zA-Z_][a-zA-Z_0-9]*`) with no other characters.
-///
-/// Used to gate bracket-subscript absorption: `arr[i]=x` and `arr[i]`
-/// only behave specially when the word so far is a bare identifier.
-/// Words like `][[`, `[c[`, or `foo^` must fall through to ordinary
-/// tokenization so `[...]` contents do not absorb whitespace.
-fn is_identifier_prefix(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let Some(first) = bytes.first() else {
-        return false;
-    };
-    if !matches!(first, b'a'..=b'z' | b'A'..=b'Z' | b'_') {
-        return false;
-    }
-    bytes[1..]
-        .iter()
-        .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
-}
-
-/// Returns true if a word value matches the assignment pattern `NAME=`,
-/// `NAME+=`, or `NAME[...]=` / `NAME[...]+=`.
-fn is_assignment_word(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    // Must start with [a-zA-Z_]
-    if !matches!(bytes.first(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_')) {
-        return false;
-    }
-    let mut i = 1;
-    // Continue with [a-zA-Z_0-9]
-    while i < bytes.len() {
-        match bytes[i] {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' => i += 1,
-            b'[' => {
-                // Skip subscript [...] — reject if it contains whitespace
-                // (bash doesn't allow spaces in assignment subscripts)
-                i += 1;
-                let mut depth = 1;
-                while i < bytes.len() && depth > 0 {
-                    match bytes[i] {
-                        b'[' => depth += 1,
-                        b']' => depth -= 1,
-                        b' ' | b'\t' | b'\n' => return false,
-                        _ => {}
-                    }
-                    i += 1;
-                }
-            }
-            b'+' if i + 1 < bytes.len() && bytes[i + 1] == b'=' => return true,
-            b'=' => return true,
-            _ => return false,
-        }
-    }
-    false
 }

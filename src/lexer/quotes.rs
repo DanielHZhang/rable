@@ -1,7 +1,8 @@
 use crate::error::{RableError, Result};
 
 use super::Lexer;
-use super::word_builder::{QuotingContext, WordBuilder};
+use super::word_builder::WordBuilder;
+use crate::word_span::QuotingContext;
 
 impl Lexer {
     /// Reads contents of a single-quoted string (after the opening `'`).
@@ -89,7 +90,7 @@ impl Lexer {
                 Some('$') => {
                     // Inside double quotes, $" is NOT a locale string — it's
                     // bare $ followed by closing ". Don't let read_dollar consume it.
-                    if self.input.get(self.pos + 1) == Some(&'"') {
+                    if self.peek_second_char() == Some('"') {
                         self.advance_char();
                         wb.push('$');
                     } else {

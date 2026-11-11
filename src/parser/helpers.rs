@@ -36,10 +36,7 @@ pub fn word_node_from_token(mut tok: Token) -> Node {
 
 /// Static dequoted value for a word, or `None` when it contains an
 /// expansion. Shared by every `Word` construction site.
-pub(super) fn word_dequoted(
-    value: &str,
-    spans: &[crate::lexer::word_builder::WordSpan],
-) -> Option<String> {
+pub(super) fn word_dequoted(value: &str, spans: &[crate::word_span::WordSpan]) -> Option<String> {
     if super::word_parts::has_expansion_spans(spans) {
         None
     } else {

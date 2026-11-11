@@ -1,3 +1,7 @@
+use std::ops::Range;
+
+use crate::word_span::WordSpan;
+
 /// Token types produced by the lexer.
 ///
 /// These map to Parable's `TokenType` constants for compatibility.
@@ -141,54 +145,59 @@ impl TokenType {
     }
 }
 
-use crate::lexer::word_builder::WordSpan;
-
 /// A token produced by the lexer.
 #[derive(Debug, Clone)]
 pub struct Token {
     pub kind: TokenType,
+    /// The token text, with line continuations removed.
     pub value: String,
+    /// Byte offset where the token starts in the source.
     pub pos: usize,
+    /// Byte offset just past the last source character consumed for the
+    /// token, including any line continuations inside or after it.
+    pub end: usize,
     pub line: usize,
     /// Expansion spans within the word value (empty for non-word tokens).
     pub(crate) spans: Vec<WordSpan>,
 }
 
 impl Token {
+    /// Creates a token whose value is exactly its source text, such as an
+    /// operator.
     pub fn new(kind: TokenType, value: impl Into<String>, pos: usize, line: usize) -> Self {
+        let value = value.into();
         Self {
             kind,
-            value: value.into(),
+            end: pos + value.len(),
+            value,
             pos,
             line,
             spans: Vec::new(),
         }
     }
 
-    /// Creates a word token with pre-recorded expansion spans.
+    /// Creates a word token covering the source byte range `source`, with
+    /// pre-recorded expansion spans.
     pub(crate) const fn with_spans(
         kind: TokenType,
         value: String,
-        pos: usize,
+        source: Range<usize>,
         line: usize,
         spans: Vec<WordSpan>,
     ) -> Self {
         Self {
             kind,
             value,
-            pos,
+            pos: source.start,
+            end: source.end,
             line,
             spans,
         }
     }
 
     /// Returns true if this token is immediately adjacent to `other` (no whitespace).
-    ///
-    /// `pos` is a character index, so adjacency is measured in characters: the
-    /// token's char count, not its byte length (which diverges for multibyte
-    /// UTF-8 — tokf #383).
-    pub fn adjacent_to(&self, other: &Self) -> bool {
-        self.pos + self.value.chars().count() == other.pos
+    pub const fn adjacent_to(&self, other: &Self) -> bool {
+        self.end == other.pos
     }
 
     pub const fn eof(pos: usize, line: usize) -> Self {
@@ -196,6 +205,7 @@ impl Token {
             kind: TokenType::Eof,
             value: String::new(),
             pos,
+            end: pos,
             line,
             spans: Vec::new(),
         }

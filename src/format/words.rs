@@ -5,9 +5,9 @@
 //! plain bash source so a command substitution body can be re-parsed and
 //! laid out canonically.
 
-use crate::lexer::word_builder::WordSpan;
 use crate::sexp::word::{WordSegment, segments_from_spans};
 use crate::sexp::{normalize_cmdsub_content, process_ansi_c_content};
+use crate::word_span::WordSpan;
 
 use super::reformat_bash;
 

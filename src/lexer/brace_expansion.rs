@@ -6,7 +6,8 @@
 //! (quotes, escapes, parameter expansions) are used to skip
 //! protected regions.
 
-use super::word_builder::{QuotingContext, WordBuilder, WordSpan, WordSpanKind};
+use super::word_builder::WordBuilder;
+use crate::word_span::{QuotingContext, WordSpan, WordSpanKind};
 
 /// Scans the completed word value for brace expansion patterns and
 /// records `BraceExpansion` spans for each one found.
@@ -101,7 +102,7 @@ fn span_end_at(pos: usize, spans: &[WordSpan]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use crate::lexer::word_builder::WordSpanKind;
+    use crate::word_span::WordSpanKind;
 
     /// Helper: lex a single word and check for `BraceExpansion` spans.
     #[allow(clippy::unwrap_used)]

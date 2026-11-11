@@ -53,6 +53,8 @@ pub(crate) struct PendingHereDoc {
 /// One heredoc body line in normalized form (delimiter-match-ready) plus
 /// termination metadata used by the cmdsub-mode rewind path.
 struct ReadLine {
+    /// Byte offset where the line starts in the source.
+    start: usize,
     line: String,
     eof_after_backslash: bool,
     /// True if the line ended at EOF with no trailing `\n` — i.e. the
@@ -73,7 +75,7 @@ impl Lexer {
 
     /// Reads all pending here-document bodies after a newline.
     pub(super) fn read_pending_heredocs(&mut self) {
-        let pending: Vec<_> = self.pending_heredocs.drain(..).collect();
+        let pending = std::mem::take(&mut self.pending_heredocs);
         for hd in pending {
             let content = self.read_heredoc_body(&hd.delimiter, hd.strip_tabs);
             self.heredoc_contents.push(content);
@@ -96,27 +98,19 @@ impl Lexer {
             if self.at_end() {
                 break;
             }
-            let ReadLine {
-                line,
-                eof_after_backslash,
-                terminated_at_eof,
-            } = self.read_heredoc_line();
+            let read = self.read_heredoc_line();
+            let line = read.line.as_str();
             // Check if this line matches the delimiter
             let check_line = if strip_tabs {
                 line.trim_start_matches('\t')
             } else {
-                line.as_str()
+                line
             };
             // Match delimiter exactly, or with trailing whitespace
             // (bash allows trailing spaces on the delimiter line)
             let mut matched = check_line == delimiter || check_line.trim_end() == delimiter;
             if !matched && cmdsub_mode {
-                matched = self.try_match_sloppy_delimiter(
-                    &line,
-                    delimiter,
-                    strip_tabs,
-                    terminated_at_eof,
-                );
+                matched = self.try_match_sloppy_delimiter(&read, delimiter, strip_tabs);
             }
             if matched {
                 break;
@@ -124,10 +118,10 @@ impl Lexer {
             if strip_tabs {
                 content.push_str(line.trim_start_matches('\t'));
             } else {
-                content.push_str(&line);
+                content.push_str(line);
             }
             // Trailing \ at EOF consumes the implicit newline
-            if !eof_after_backslash {
+            if !read.eof_after_backslash {
                 content.push('\n');
             }
         }
@@ -138,6 +132,7 @@ impl Lexer {
     /// (line-continuations collapsed, trailing `\n` excluded, backslash-EOF
     /// doubled) plus termination flags.
     fn read_heredoc_line(&mut self) -> ReadLine {
+        let start = self.pos;
         let mut line = String::new();
         let mut prev_backslash = false;
         let mut eof_after_backslash = false;
@@ -166,6 +161,7 @@ impl Lexer {
             }
         }
         ReadLine {
+            start,
             line,
             eof_after_backslash,
             terminated_at_eof,
@@ -186,15 +182,14 @@ impl Lexer {
     /// strict delimiter rule.
     fn try_match_sloppy_delimiter(
         &mut self,
-        line: &str,
+        read: &ReadLine,
         delimiter: &str,
         strip_tabs: bool,
-        terminated_at_eof: bool,
     ) -> bool {
         let check = if strip_tabs {
-            line.trim_start_matches('\t')
+            read.line.trim_start_matches('\t')
         } else {
-            line
+            read.line.as_str()
         };
         let Some(tail) = check.strip_prefix(delimiter) else {
             return false;
@@ -209,20 +204,11 @@ impl Lexer {
         if !tail.chars().all(|c| matches!(c, ' ' | '\t' | ')')) {
             return false;
         }
-        // Rewind: leave `self.pos` just past the delimiter characters.
-        // `read_heredoc_line` consumed `line.chars().count()` chars plus
-        // 1 extra if the line was `\n`-terminated.
-        let line_chars = line.chars().count();
-        let consumed = line_chars + usize::from(!terminated_at_eof);
-        let leading_tabs = if strip_tabs {
-            line.chars().take_while(|&c| c == '\t').count()
-        } else {
-            0
-        };
-        let retain = leading_tabs + delimiter.chars().count();
-        let rewind = consumed.saturating_sub(retain);
-        self.pos -= rewind;
-        if !terminated_at_eof {
+        // Rewind: leave `self.pos` just past the stripped tabs and the
+        // delimiter.
+        let leading_tabs = read.line.len() - check.len();
+        self.pos = read.start + leading_tabs + delimiter.len();
+        if !read.terminated_at_eof {
             // The `\n` bump from `read_heredoc_line` must be undone: the
             // outer scanner will re-consume the `\n` and bump again.
             self.line = self.line.saturating_sub(1);

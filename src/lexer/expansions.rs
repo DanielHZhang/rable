@@ -4,7 +4,8 @@ use crate::context::CaseTracker;
 use crate::error::{RableError, Result};
 
 use super::Lexer;
-use super::word_builder::{QuotingContext, WordBuilder, WordSpanKind};
+use super::word_builder::WordBuilder;
+use crate::word_span::{QuotingContext, WordSpanKind};
 
 /// Per-loop state for `read_matched_parens_inner`: paren depth for the
 /// matching-close decision, a `CaseTracker` for `case X in pat) ... ;;`
@@ -112,8 +113,7 @@ impl Lexer {
             end_line,
             node,
         } = crate::parser::parse_paren_body(self, outer_depth)?;
-        wb.value
-            .extend(self.input[body_start..end_pos].iter().copied());
+        wb.value.push_str(&self.input[body_start..end_pos]);
         wb.set_pending_body(node);
         self.pos = end_pos;
         self.line = end_line;
@@ -440,8 +440,7 @@ impl Lexer {
             let (end_pos, end_line) = self.scan_backtick_opaque(body_start)?;
             (end_pos, end_line, None)
         };
-        wb.value
-            .extend(self.input[body_start..end_pos].iter().copied());
+        wb.value.push_str(&self.input[body_start..end_pos]);
         if let Some(node) = node {
             wb.set_pending_body(node);
         }
@@ -460,28 +459,26 @@ impl Lexer {
     /// `end_pos` one past the closing backtick; errors with
     /// `MatchedPair` when EOF is reached first.
     fn scan_backtick_opaque(&self, body_start: usize) -> Result<(usize, usize)> {
-        let mut pos = body_start;
+        let body = &self.input[body_start..];
         let mut line = self.line;
-        while let Some(c) = self.input.get(pos).copied() {
-            match c {
-                '\\' => {
-                    pos += 1;
-                    if let Some(next) = self.input.get(pos).copied() {
-                        if next == '\n' {
-                            line += 1;
-                        }
-                        pos += 1;
-                    }
-                }
-                '`' => return Ok((pos + 1, line)),
-                '\n' => {
-                    line += 1;
-                    pos += 1;
-                }
-                _ => pos += 1,
+        let mut escaped = false;
+        for (offset, c) in body.char_indices() {
+            if c == '\n' {
+                line += 1;
+            }
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '`' {
+                return Ok((body_start + offset + 1, line));
             }
         }
-        Err(RableError::matched_pair("unterminated backtick", pos, line))
+        Err(RableError::matched_pair(
+            "unterminated backtick",
+            self.input.len(),
+            line,
+        ))
     }
 
     /// Reads deprecated `$[...]` arithmetic with bracket depth tracking.

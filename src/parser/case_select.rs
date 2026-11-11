@@ -22,8 +22,7 @@ impl Parser {
                 dequoted,
                 spans: word_tok.spans,
             },
-            // Char count, not byte length: `pos` is a character index (#383).
-            Span::new(word_tok.pos, word_tok.pos + word_tok.value.chars().count()),
+            Span::new(word_tok.pos, word_tok.end),
         ));
 
         self.lexer.set_command_start();

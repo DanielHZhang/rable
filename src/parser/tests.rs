@@ -28,10 +28,6 @@ fn collect_leaf_commands<'a>(node: &'a Node, out: &mut Vec<&'a Node>) {
 
 /// Slice `source` by **character** offsets, mirroring how `Node::source_text`
 /// resolves spans. Test helper for asserting inter-span gaps.
-fn char_slice(source: &str, start: usize, end: usize) -> String {
-    source.chars().skip(start).take(end - start).collect()
-}
-
 #[test]
 fn simple_command() {
     let nodes = parse("echo hello");
@@ -414,7 +410,7 @@ fn source_text_span_past_source_end() {
 
 #[test]
 fn source_text_multibyte_utf8() {
-    // Source with multi-byte characters: "é" is 2 bytes but 1 char
+    // Source with multi-byte characters: "é" is 2 bytes
     let source = "echo café";
     let nodes = parse(source);
     assert_eq!(nodes[0].source_text(source), "echo café");
@@ -428,11 +424,8 @@ fn source_text_multibyte_utf8() {
 #[test]
 fn source_text_multibyte_non_last_word() {
     // Regression (tokf #383): a multibyte word that is NOT the last token.
-    // Before the char-count span fix, the word's span end was computed as
-    // `pos + byte_len`, overshooting into the following token — here `café`
-    // would bleed into ` bar`. The previous `source_text_multibyte_utf8`
-    // test missed this because its multibyte word was last, so the
-    // overshooting span clamped harmlessly to the source end.
+    // A span end that disagreed with the start's unit would bleed `café`
+    // into ` bar`.
     let source = "echo café bar";
     let nodes = parse(source);
     assert_eq!(nodes[0].source_text(source), "echo café bar");
@@ -456,9 +449,8 @@ fn source_text_multibyte_compound_segments() {
     collect_leaf_commands(&nodes[0], &mut leaves);
     let texts: Vec<&str> = leaves.iter().map(|n| n.source_text(source)).collect();
     assert_eq!(texts, vec!["echo \"✓ ok\"", "echo \"✗ no\"", "ls"]);
-    // The gap between the first two leaves must be exactly the `||` operator
-    // (converting the character spans to byte offsets, as source_text does).
-    let gap = char_slice(source, leaves[0].span.end, leaves[1].span.start);
+    // The gap between the first two leaves must be exactly the `||` operator.
+    let gap = &source[leaves[0].span.end..leaves[1].span.start];
     assert_eq!(gap, " || ");
 }
 
